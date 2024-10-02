@@ -1,0 +1,184 @@
+# -*- coding: utf-8 -*-
+# ---
+# jupyter:
+#   jupytext:
+#     text_representation:
+#       extension: .ipy
+#       format_name: percent
+#       format_version: '1.3'
+#       jupytext_version: 1.6.0
+#   kernelspec:
+#     display_name: Python 3
+#     language: python
+#     name: python3
+# ---
+
+import os
+#cwd = os.getcwd()
+
+os.chdir('/dcs04/legacy-dcs01-hansen/hansen_lab1/ywang/ST/April8_2022_NSF/nsf-paper-main_9_ori')
+os.mkdir('simulations/ggblocks_lr/data/')
+
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from os import path
+from pandas import get_dummies
+from anndata import AnnData
+from scanpy import pp
+
+from utils import misc,preprocess,visualize
+
+dtp = "float32"
+pth = "simulations/ggblocks_lr"
+dpth = path.join(pth,"data")
+
+# %%
+rng = np.random.default_rng(222)
+def generate_gg_blocks():
+    A = np.zeros( [ 4 , 36 ] )
+    A[0, [ 1 , 6 , 7 , 8 , 13 ] ] = 1
+    A[1, [ 3 , 4 , 5 , 9 , 11 , 15 , 16 , 17  ] ] = 1
+    A[2, [ 18 , 24 , 25 , 30 , 31 , 32 ] ] = 1
+    A[3, [ 21 , 22 , 23 , 28 , 34 ] ] = 1
+    return A
+
+ncopy = 5
+nside = ncopy*6
+N = (nside)**2
+N=900
+X = misc.make_grid(N)
+X[:,1] = -X[:,1] #make the display the same
+X = preprocess.rescale_spatial_coords(X)
+J = 900
+L = 4
+A = generate_gg_blocks()
+A = A.reshape((L,6,6))
+A = np.kron(A,np.ones((1,ncopy,ncopy)))
+Ftrue = A.reshape((L,N)).T #NxL
+
+X1=X
+X2= -X
+
+aa=X[:,0]
+X2[:,0]=X[:,1]
+X2[:,1]=-aa
+
+
+#%%
+w = rng.choice(L,J,replace=True)
+#w[0:225]=np.ones((225))-1
+#w[225:450]=np.ones((225))
+#w[450:675]=np.ones((225))+1
+#w[675:900]=np.ones((225))+2
+
+#w1=w
+#w2=-w
+#w2=-w2
+#w2[0:225]=0
+
+Wtrue = 10.9*get_dummies(w).to_numpy(dtype=dtp) #JxL indicator matrix
+
+
+
+v = rng.choice(4,J,replace=True)
+Vtrue = 8.9*get_dummies(v).to_numpy(dtype=dtp) #Jx2 indicator matrix
+
+Utrue = rng.binomial(1,0.2,size=(N,4))
+UVt = Utrue @ Vtrue.T
+Ftrue1=Ftrue
+Ftrue2=-Ftrue
+Ftrue2=-Ftrue2
+Ftrue2[:,0]=0
+
+Lambda_true1 = 0.2+Ftrue1 @ Wtrue.T + UVt #NxJ
+Lambda_true2 = 0.2+Ftrue2 @ Wtrue.T + UVt #NxJ
+Y1 = rng.negative_binomial(10,10/(Lambda_true1+10))
+Y2 = rng.negative_binomial(10,10/(Lambda_true2+10))
+hmkw = {"figsize":(4,.9),"bgcol":"white","subplot_space":0.1,"marker":"s","s":10}
+plt_pth = path.join(pth,"results/plots")
+
+
+#fig,axes=visualize.heatmap(X1,Y1[:,67],s=50,marker="s",figsize=(4.1,4))
+#fig=visualize.heatmap(X,Y[:,67],s=100,marker="s",cmap="Blues")
+#visualize.multiheatmap(X,Y1[:,67], (1,4),cmap="Blues", **hmkw)
+#fig.savefig(path.join(plt_pth,"ggblocks_obs.png"),bbox_inches='tight')
+Yss = rng.choice(Y1,replace=False,axis=1,size=4)
+Yss = Y1[:,(899,898,897,896)]
+fig,axes=visualize.multiheatmap(X, Yss, (1,4), cmap="Blues", **hmkw)
+fig.savefig(path.join(plt_pth,"ggblocks_lr_data_sample1_SSlayer.png"),bbox_inches='tight')
+
+
+Yss = rng.choice(Y2,replace=False,axis=1,size=4)
+Yss = Y2[:,(899,898,897,896)]
+fig,axes=visualize.multiheatmap(X2, Yss, (1,4), cmap="Blues", **hmkw)
+fig.savefig(path.join(plt_pth,"ggblocks_lr_data_sample2_SSlayer.png"),bbox_inches='tight')
+
+
+
+#%%
+from sklearn.decomposition import NMF
+fit = NMF(L,beta_loss="kullback-leibler",solver="mu",init="nndsvda")
+Fplot = fit.fit_transform(Y1)
+hmkw = {"figsize":(4,.9),"bgcol":"white","subplot_space":0.1,"marker":"s","s":10}
+fig,axes=visualize.multiheatmap(X, Fplot, (1,4), cmap="Blues", **hmkw)
+fig.savefig(path.join(plt_pth,"ggblocks_nmf_sample1_SSlayer.png"),bbox_inches='tight')
+
+Fplot = fit.fit_transform(Y2)
+hmkw = {"figsize":(4,.9),"bgcol":"white","subplot_space":0.1,"marker":"s","s":10}
+fig,axes=visualize.multiheatmap(X, Fplot, (1,4), cmap="Blues", **hmkw)
+fig.savefig(path.join(plt_pth,"ggblocks_nmf_sample2_SSlayer.png"),bbox_inches='tight')
+
+
+
+
+#%% Save as anndata - sample 1
+ad1 = AnnData(Y1,obsm={"spatial":X1,"factors":Ftrue1},varm={"loadings":Wtrue})
+ad1.layers = {"counts":ad1.X.copy()} #store raw counts before normalization changes ad1.X
+pp.normalize_total(ad1, inplace=True, layers=None, key_added="sizefactor")
+pp.log1p(ad1)
+ad1.write_h5ad(path.join(dpth,"ggblocks_lr_1_SSlayer.h5ad"),compression="gzip")
+
+
+#ad1=ad
+#fig,axes=visualize.heatmap(ad1.obsm["spatial"],ad1.obsm["factors"][:,3],s=50,marker="s",figsize=(4.1,4))
+fig,axes=visualize.multiheatmap(X1, ad1.obsm["factors"], (1,4), cmap="Blues", **hmkw)
+fig.savefig(path.join(plt_pth,"ggblocks_factors_sample1_SSlayer.png"),bbox_inches='tight')
+
+
+
+
+
+#%% Save as anndata - sample 2
+ad2 = AnnData(Y2,obsm={"spatial":X2,"factors":Ftrue2},varm={"loadings":Wtrue})
+ad2.layers = {"counts":ad2.X.copy()} #store raw counts before normalization changes ad2.X
+pp.normalize_total(ad2, inplace=True, layers=None, key_added="sizefactor")
+pp.log1p(ad2)
+ad2.write_h5ad(path.join(dpth,"ggblocks_lr_2_SSlayer.h5ad"),compression="gzip")
+#visualize.heatmap(ad2.obsm["spatial"],ad2.obsm["factors"][:,3],s=50,marker="s",figsize=(4.1,4))
+fig,axes=visualize.multiheatmap(X2, ad2.obsm["factors"], (1,4), cmap="Blues", **hmkw)
+#fig,axes=visualize.heatmap(ad1.obsm["spatial"],ad2.obsm["factors"][:,3],s=50,marker="s",figsize=(4.1,4))
+fig.savefig(path.join(plt_pth,"ggblocks_factors_sample2_SSlayer.png"),bbox_inches='tight')
+
+
+
+
+DF = pd.DataFrame(Ftrue1) 
+DF.to_csv("ggblocks_lr_sample1_SSlayer.csv")
+
+
+DF = pd.DataFrame(Ftrue2) 
+DF.to_csv("ggblocks_lr_sample2_SSlayer.csv")
+
+
+
+
+
+
+
+
+
+
+
+
